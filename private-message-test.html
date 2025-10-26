@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+  <meta charset="UTF-8" />
+  <title>Chatio - Socket Test</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    :root { --sidebar-width: 260px; --accent-blue: #007bff; }
+    body { margin:0; font-family: Arial, Helvetica, sans-serif; direction: rtl; background:#f4f6f8; }
+    .app { display:flex; height:100vh; }
+    /* Sidebar */
+    .sidebar { width:var(--sidebar-width); background:#fff; border-left:1px solid #e0e0e0; padding:12px; box-sizing:border-box; overflow:auto; }
+    .sidebar h4 { margin:6px 0 12px 0; }
+    .online-list { list-style:none; padding:0; margin:0; }
+    .online-item { display:flex; align-items:center; gap:10px; padding:6px; border-radius:8px; cursor:default; }
+    .online-item + .online-item { margin-top:6px; }
+    .online-item img { width:40px; height:40px; border-radius:50%; object-fit:cover; }
+    .online-item .name { font-weight:600; }
+    .online-item .dot { width:10px; height:10px; border-radius:50%; background:#28a745; margin-left:6px; }
+
+    /* Chat area */
+    .chat { flex:1; display:flex; flex-direction:column; padding:12px; box-sizing:border-box; }
+    .header { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+    .header .info { display:flex; gap:8px; align-items:center; }
+    .header input, .controls input { padding:6px; border:1px solid #ddd; border-radius:6px; }
+    .messages { background:#fff; border:1px solid #e6e6e6; padding:12px; flex:1; overflow:auto; border-radius:8px; }
+    .msg {
+      display: flex;
+      gap: 10px;
+      margin: 8px 0;
+      align-items: flex-start;
+    }
+
+    .msg.right {
+  flex-direction: row; /* دايماً من اليمين للشمال */
+  justify-content: flex-end;
+}
+
+.msg.left {
+  flex-direction: row;
+  justify-content: flex-start;
+}
+
+.msg img.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+    .bubble { max-width:70%; padding:8px 10px; border-radius:8px; display:inline-block; }
+    .bubble.me { background:#dcf8c6; }
+    .bubble.other { background:#f1f0f0; }
+    .meta { font-size:12px; color:#666; margin-top:6px; display:flex; align-items:center; gap:8px; }
+    .status { font-weight:700; color:#666; margin-left:6px; }
+    .status.read { color: var(--accent-blue); }
+
+    .footer { margin-top:8px; display:flex; gap:8px; align-items:center; }
+    .footer input { flex:1; padding:10px; border-radius:8px; border:1px solid #ddd; }
+    .footer button { padding:8px 12px; border-radius:8px; border:none; background:var(--accent-blue); color:#fff; cursor:pointer; }
+
+    /* small screens */
+    @media (max-width:800px) {
+      .sidebar { display:none; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+    <div class="chat">
+      <div class="header">
+        <div class="info">
+          <button id="connectBtn">اتصال</button>
+          <input id="tokenInput" placeholder="ضع التوكن هنا" style="width:260px;">
+          <button id="setupBtn">Setup</button>
+        </div>
+        <div class="controls">
+          <input id="convIdInput" placeholder="Conversation ID" style="width:220px;">
+          <button id="joinBtn">Join</button>
+        </div>
+      </div>
+
+      <div class="messages" id="messages"></div>
+
+      <div id="typingIndicator" style="color:gray; font-style:italic; margin-top:6px;"></div>
+
+      <div class="footer">
+        <input id="msgInput" placeholder="اكتب رسالة...">
+        <button id="sendMsgBtn">إرسال</button>
+      </div>
+    </div>
+
+    <aside class="sidebar">
+      <h4>المستخدمون المتصلون</h4>
+      <ul class="online-list" id="onlineList"></ul>
+    </aside>
+  </div>
+
+<script>
+  let socket = null;
+  let me = null;
+  let typingTimeout = null;
+
+  function createOnlineItem(u) {
+    const li = document.createElement('li');
+    li.className = 'online-item';
+    li.dataset.userId = u.id;
+
+    const img = document.createElement('img');
+    img.src = u.avatar || 'https://via.placeholder.com/40';
+    img.alt = u.name;
+
+    const name = document.createElement('div');
+    name.className = 'name';
+    name.textContent = u.name;
+
+    const dot = document.createElement('div');
+    dot.className = 'dot';
+
+    li.appendChild(img);
+    li.appendChild(name);
+    li.appendChild(dot);
+
+    return li;
+  }
+
+  function renderOnlineList(users) {
+    const ul = document.getElementById('onlineList');
+    ul.innerHTML = '';
+    users.forEach(u => {
+      ul.appendChild(createOnlineItem(u));
+    });
+  }
+
+  function renderMessageObj(msg, isMine, tempId = null) {
+    const container = document.createElement('div');
+    container.className = 'msg ' + (isMine ? 'right' : 'left');
+    if (msg._id) container.dataset.messageId = msg._id;
+    if (tempId) container.dataset.tempId = tempId;
+
+    const avatar = document.createElement('img');
+    avatar.className = 'avatar';
+    avatar.src = (msg.sender && msg.sender.avatar) ? msg.sender.avatar : 'https://via.placeholder.com/36';
+    avatar.alt = msg.sender?.name || '';
+
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble ' + (isMine ? 'me' : 'other');
+
+    const line = document.createElement('div');
+    const statusSpan = document.createElement('span');
+    statusSpan.className = 'status';
+    
+    let statusMark = '✔';
+    if (msg.status === 'sent') statusMark = '✔';
+    else if (msg.status === 'delivered') statusMark = '✔✔';
+    else if (msg.status === 'read') { statusMark = '✔✔'; statusSpan.classList.add('read'); }
+    statusSpan.textContent = statusMark;
+
+    const who = document.createElement('strong');
+    who.textContent = msg.sender?.name || msg.sender || 'مستخدم';
+
+    const text = document.createElement('span');
+    text.style.marginLeft = '8px';
+    text.textContent = ': ' + (msg.content || '');
+
+    
+    line.appendChild(who);
+    line.appendChild(text);
+    line.appendChild(statusSpan);
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    const t = new Date(msg.createdAt || Date.now()).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' });
+    meta.textContent = t;
+
+    bubble.appendChild(line);
+    bubble.appendChild(meta);
+
+    if (isMine) {
+  // ✅ رسائلي أنا: avatar ثم الرسالة
+      container.appendChild(bubble);      
+      container.appendChild(avatar);
+        
+      } else {
+        // ✅ رسائل الطرف الآخر: الرسالة ثم avatar
+        container.appendChild(avatar);
+        container.appendChild(bubble);
+      }
+
+    return container;
+  }
+
+  document.getElementById('connectBtn').onclick = function() {
+    socket = io('http://localhost:5000');
+
+    socket.on('connect', () => console.log('socket connected', socket.id));
+    socket.on('disconnect', () => console.log('socket disconnected'));
+
+    socket.on('connected', (data) => {
+      me = data.me;
+      console.log('authenticated as', me);
+    });
+
+    socket.on('online_users', (users) => {
+      renderOnlineList(users);
+    });
+
+    socket.on('new_message', (msg) => {
+      const isMine = me && (msg.sender?.id === me.id || msg.sender === me.id);
+      if (msg.tempId) {
+        const el = document.querySelector(`[data-temp-id="${msg.tempId}"]`);
+        if (el) {
+          if (msg._id) el.dataset.messageId = msg._id;
+          const s = el.querySelector('.status');
+          if (s) { s.textContent = msg.status === 'read' ? '✔✔' : msg.status === 'delivered' ? '✔✔' : '✔'; if (msg.status === 'read') s.classList.add('read'); }
+          el.querySelector('.meta').textContent = new Date(msg.createdAt).toLocaleTimeString('ar-EG', { hour:'2-digit', minute:'2-digit' });
+          el.querySelector('.avatar').src = msg.sender?.avatar || el.querySelector('.avatar').src;
+          el.querySelector('strong').textContent = msg.sender?.name || me.name;
+          return;
+        }
+      }
+
+      const node = renderMessageObj(msg, isMine);
+      document.getElementById('messages').appendChild(node);
+      node.scrollIntoView({ behavior:'smooth', block:'end' });
+
+      const currentConv = document.getElementById('convIdInput').value;
+      if (!isMine && currentConv && msg.conversation === currentConv) {
+        socket.emit('mark_as_read', { conversationId: currentConv });
+      }
+    });
+
+    socket.on('messages_delivered', ({ conversationId, deliveredIds }) => {
+      deliveredIds.forEach(id => {
+        const el = document.querySelector(`[data-message-id="${id}"]`);
+        if (el) {
+          const s = el.querySelector('.status');
+          if (s) { s.textContent = '✔✔'; s.classList.remove('read'); }
+        }
+      });
+    });
+
+    socket.on('messages_read', ({ conversationId, messageIds }) => {
+      messageIds.forEach(id => {
+        const el = document.querySelector(`[data-message-id="${id}"]`);
+        if (el) {
+          const s = el.querySelector('.status');
+          if (s) { s.textContent = '✔✔'; s.classList.add('read'); }
+        }
+      });
+    });
+
+    socket.on('typing', () => {
+      document.getElementById('typingIndicator').innerText = '✍️ المستخدم يكتب...';
+    });
+    socket.on('stop_typing', () => {
+      document.getElementById('typingIndicator').innerText = '';
+    });
+  };
+
+  document.getElementById('setupBtn').onclick = function() {
+    const token = document.getElementById('tokenInput').value;
+    if (!socket) return alert('اتصل أولاً');
+    socket.emit('setup', token);
+  };
+
+  document.getElementById('joinBtn').onclick = function() {
+    const convId = document.getElementById('convIdInput').value;
+    if (!socket) return alert('اتصل أولاً');
+    socket.emit('join_conversation', convId);
+  };
+
+  document.getElementById('sendMsgBtn').onclick = function() {
+    const convId = document.getElementById('convIdInput').value;
+    const content = document.getElementById('msgInput').value;
+    if (!socket || !convId) return alert('اتصل وانضم للمحادثة أولاً');
+
+    const tempId = 't_' + Date.now() + '_' + Math.floor(Math.random()*10000);
+    const tempMsg = {
+      _id: '',
+      tempId,
+      conversation: convId,
+      content,
+      createdAt: Date.now(),
+      status: 'sent',
+      sender: me ? { id: me.id, name: me.name, avatar: me.avatar } : { id: '', name: 'أنا', avatar: '' }
+    };
+    const node = renderMessageObj(tempMsg, true, tempId);
+    node.dataset.tempId = tempId;
+    document.getElementById('messages').appendChild(node);
+    node.scrollIntoView({ behavior:'smooth', block:'end' });
+
+    socket.emit('private_message', { conversationId: convId, content, tempId });
+    document.getElementById('msgInput').value = '';
+  };
+
+  document.getElementById('msgInput').addEventListener('input', () => {
+    const convId = document.getElementById('convIdInput').value;
+    if (!socket || !convId) return;
+    socket.emit('typing', convId);
+    clearTimeout(typingTimeout);
+    typingTimeout = setTimeout(() => socket.emit('stop_typing', convId), 1000);
+  });
+
+  (function autoReadSetup(){
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach(m => {
+        m.addedNodes.forEach(node => {
+          if (!node.dataset) return;
+          const convId = document.getElementById('convIdInput').value;
+          const senderName = node.querySelector('strong')?.textContent || '';
+          if (me && convId && senderName !== me.name) {
+            socket && socket.emit('mark_as_read', { conversationId: convId });
+          }
+        });
+      });
+    });
+    const target = document.getElementById('messages');
+    observer.observe(target, { childList:true });
+  })();
+</script>

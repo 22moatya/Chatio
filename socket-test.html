@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Socket.IO Test</title>
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+</head>
+<body>
+  <h2>Socket.IO Test Page</h2>
+
+  <label>Token:</label>
+  <input id="token" type="text" placeholder="ضع التوكن هنا" style="width: 300px;">
+  <button onclick="sendSetup()">Setup</button>
+  <br><br>
+
+  <label>Conversation ID:</label>
+  <input id="convId" type="text" placeholder="conversationId" style="width: 300px;">
+  <button onclick="joinConversation()">Join Conversation</button>
+  <br><br>
+
+  <label>Message:</label>
+  <input id="message" type="text" placeholder="اكتب رسالة..." style="width: 300px;">
+  <button onclick="sendPrivateMessage()">Send Message</button>
+
+  <h3>Logs:</h3>
+  <pre id="logs" style="background:#f0f0f0; padding:10px; height:200px; overflow:auto;"></pre>
+
+  <script>
+    const socket = io("http://localhost:5000");
+
+    const logBox = document.getElementById("logs");
+    function log(msg) {
+      logBox.textContent += msg + "\n";
+    }
+
+    socket.on("connect", () => {
+      log("✅ Connected: " + socket.id);
+    });
+
+    socket.on("connected", () => {
+      log("✅ Setup success, authenticated");
+    });
+
+    socket.on("new_message", (data) => {
+      log("📩 New private message: " + JSON.stringify(data));
+    });
+
+    socket.on("disconnect", () => {
+      log("❌ Disconnected");
+    });
+
+    function sendSetup() {
+      const token = document.getElementById("token").value;
+      socket.emit("setup", token);
+      log("🔹 Sent setup with token");
+    }
+
+    function joinConversation() {
+      const conversationId = document.getElementById("convId").value;
+      socket.emit("join_conversation", conversationId);
+      log("🔹 Joined conversation " + conversationId);
+    }
+
+    function sendPrivateMessage() {
+      const conversationId = document.getElementById("convId").value;
+      const content = document.getElementById("message").value;
+      socket.emit("private_message", {
+        conversationId,
+        content
+      });
+      log("🔹 Message sent => " + content);
+    }
+  </script>
+</body>
+</html>
